@@ -14,12 +14,8 @@ const server = http.createServer(app);
 // Initialize socket.io server
 
 export const io = new Server(server, {
-  cors: {
-    origin: "https://quick-chat-65he3al8g-devansh-parashars-projects.vercel.app",
-    methods: ["GET", "POST"]
-  }
+  cors: { origin: "*" },
 });
-
 
 //store online user
 
@@ -47,15 +43,7 @@ io.on("connection", (socket) => {
 // Middleware
 
 app.use(express.json({ limit: "4mb" }));
-app.use(
-  cors({
-    origin: [
-      "https://quick-chat-65he3al8g-devansh-parashars-projects.vercel.app"
-    ],
-    credentials: true
-  })
-);
-
+app.use(cors());
 
 app.use("/api/status", (req, res) => res.send("Sender is live"));
 app.use("/api/auth", userRouter);
