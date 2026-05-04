@@ -2,18 +2,24 @@ import axios from "axios";
 
 const getAIResponse = async (prompt) => {
   try {
+    if (!process.env.GROQ_API_KEY) {
+      throw new Error("Missing GROQ_API_KEY");
+    }
+
     const res = await axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
       {
-        model: "llama3-70b-8192",
+        model: "llama-3.1-8b-instant", 
+        temperature: 0.7,
         messages: [
           {
             role: "system",
-            content: "Act as a helpful chatbot like WhatsApp AI for Application known as Quick Chat",
+            content:
+              "You are QuickChat AI, a helpful assistant like WhatsApp AI.",
           },
           {
             role: "user",
-            content: prompt,
+            content: String(prompt || ""),
           },
         ],
       },
@@ -25,9 +31,9 @@ const getAIResponse = async (prompt) => {
       }
     );
 
-    return res.data.choices[0].message.content;
+    return res.data?.choices?.[0]?.message?.content || "No response";
   } catch (err) {
-    console.log(err.message);
+    console.log("GROQ ERROR:", err.response?.data || err.message);
     return "AI is not available right now.";
   }
 };
