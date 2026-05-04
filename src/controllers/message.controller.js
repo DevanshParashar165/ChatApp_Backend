@@ -4,6 +4,8 @@ import User from "../models/user.model.js";
 import { ApiResponse } from "../utils/apiResponse.js";
 import { io } from "../../server.js";
 import { userSocketMap } from "../../server.js";
+import getAIResponse from "../utils/aiResponse.js";
+import AIMessage from "../models/aiMessage.model.js";
 
 //Get all user except the loggen in user
 export const getUserForSidebar = async (req, res) => {
@@ -41,6 +43,27 @@ export const getMessages = async (req, res) => {
   try {
     const { id: selectedUserId } = req.params;
     const myId = req.user._id;
+
+    if (selectedUserId === "ai_quickchat") {
+      const aiMessages = await AIMessage.find({ userId: myId }).sort({
+        createdAt: 1,
+      });
+
+      const formattedMessages = aiMessages.map((msg) => ({
+        senderId: msg.role === "user" ? myId : "ai_quickchat",
+        receiverId: msg.role === "user" ? "ai_quickchat" : myId,
+        text: msg.text,
+        createdAt: msg.createdAt,
+      }));
+
+      return res.json(
+        new ApiResponse(
+          200,
+          { messages: formattedMessages },
+          "AI messages fetched"
+        )
+      );
+    }
 
     const messages = await Message.find({
       $or: [
@@ -91,6 +114,44 @@ export const sendMessage = async (req, res) => {
     const { text, image } = req.body;
     const receiverId = req.params.id;
     const senderId = req.user._id;
+    if (receiverId === "ai_quickchat") {
+      await AIMessage.create({
+        userId: senderId,
+        role: "user",
+        text,
+      });
+
+      const history = await AIMessage.find({ userId: senderId })
+        .sort({ createdAt: 1 })
+        .limit(10);
+
+      const conversation = history
+        .map((msg) => `${msg.role}: ${msg.text}`)
+        .join("\n");
+
+      const aiReply = await getAIResponse(conversation + `\nuser: ${text}`);
+
+      await AIMessage.create({
+        userId: senderId,
+        role: "assistant",
+        text: aiReply,
+      });
+
+      return res.json(
+        new ApiResponse(
+          200,
+          {
+            newMessage: {
+              senderId: "ai_quickchat",
+              receiverId: senderId,
+              text: aiReply,
+              createdAt: new Date(),
+            },
+          },
+          "AI response generated"
+        )
+      );
+    }
     let imageUrl;
     if (image) {
       const uploadResponse = await cloudinary.uploader.upload(image);

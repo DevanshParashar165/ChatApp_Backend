@@ -33,6 +33,43 @@ io.on("connection", (socket) => {
 
   io.emit("getOnlineUsers", Object.keys(userSocketMap));
 
+  // Video calling feature addition
+
+  socket.on("call-user", ({ to, offer }) => {
+    const receiverSocketId = userSocketMap[to];
+    if (!receiverSocketId) return;
+
+    io.to(receiverSocketId).emit("incoming-call", {
+      from: userId,
+      offer,
+    });
+  });
+
+  socket.on("answer-call", ({ to, answer }) => {
+    const callerSocketId = userSocketMap[to];
+    if (!callerSocketId) return;
+
+    io.to(callerSocketId).emit("call-accepted", { answer });
+  });
+
+  socket.on("reject-call", ({ to }) => {
+    const callerSocketId = userSocketMap[to];
+    if (!callerSocketId) return;
+
+    io.to(callerSocketId).emit("call-rejected");
+  });
+
+  socket.on("end-call", ({ to }) => {
+    io.to(to).emit("call-ended");
+  });
+
+  socket.on("ice-candidate", ({ to, candidate }) => {
+    const targetSocketId = userSocketMap[to];
+    if (!targetSocketId) return;
+
+    io.to(targetSocketId).emit("ice-candidate", { candidate });
+  });
+
   socket.on("disconnect", () => {
     console.log("user disconnected : ", userId);
     delete userSocketMap[userId];
@@ -43,7 +80,12 @@ io.on("connection", (socket) => {
 // Middleware
 
 app.use(express.json({ limit: "4mb" }));
-app.use(cors());
+app.use(
+  cors({
+    origin: "*",
+    credentials: true,
+  })
+);
 
 app.use("/api/status", (req, res) => res.send("Sender is live"));
 app.use("/api/auth", userRouter);
@@ -62,4 +104,4 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 //Export server for vercel
-export default server
+export default server;
