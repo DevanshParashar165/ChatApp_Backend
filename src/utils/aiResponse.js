@@ -1,19 +1,35 @@
 import axios from "axios";
-import { get } from "mongoose";
 
 const getAIResponse = async (prompt) => {
   try {
-    const res = await axios.post("http://localhost:11434/api/generate", {
-      model: "llama3",
-      prompt : `Act as an chatbot for me for all upcoming chats `+prompt,
-      stream: false,
-    });
-    console.log(res.data.response)
-    return res.data.response;
+    const res = await axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        model: "llama3-70b-8192",
+        messages: [
+          {
+            role: "system",
+            content: "Act as a helpful chatbot like WhatsApp AI for Application known as Quick Chat",
+          },
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    return res.data.choices[0].message.content;
   } catch (err) {
-    console.log(err)
+    console.log(err.message);
     return "AI is not available right now.";
   }
 };
 
-export default getAIResponse
+export default getAIResponse;
