@@ -88,8 +88,11 @@ app.use(errorHandler);
 
 await connectDB();
 
-if (process.env.NODE_ENV !== "production") {
-  const port = process.env.PORT || 5000;
+const port = process.env.PORT || 5000;
+
+// Vercel runs serverless — it hosts the HTTP server itself.
+// Railway (and local dev) need an explicit listen for Socket.io.
+if (!process.env.VERCEL) {
   server.listen(port, () => {
     console.log(`Server is running on port : ${port}`);
   });
