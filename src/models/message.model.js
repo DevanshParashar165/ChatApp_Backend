@@ -11,11 +11,16 @@ const messageSchema = new mongoose.Schema(
     receiverId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
+      index: true,
+    },
+    groupId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Group",
       index: true,
     },
     text: { type: String, trim: true },
     image: { type: String },
+    audio: { type: String },
     seen: { type: Boolean, default: false },
     deliveryStatus: {
       type: String,
@@ -26,6 +31,22 @@ const messageSchema = new mongoose.Schema(
     readAt: { type: Date },
     isDeleted: { type: Boolean, default: false },
     editedAt: { type: Date },
+    reactions: [
+      {
+        userId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
+        emoji: {
+          type: String,
+          required: true,
+        },
+      },
+    ],
+    isPinned: { type: Boolean, default: false },
+    pinnedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    replyTo: { type: mongoose.Schema.Types.ObjectId, ref: "Message" },
   },
   { timestamps: true }
 );

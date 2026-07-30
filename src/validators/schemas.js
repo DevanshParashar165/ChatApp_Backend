@@ -24,9 +24,11 @@ export const sendMessageSchema = z.object({
     .object({
       text: z.string().trim().max(5000).optional(),
       image: z.string().optional(),
+      audio: z.string().optional(),
+      replyTo: z.string().optional(),
     })
-    .refine((data) => data.text || data.image, {
-      message: "Message must contain text or image",
+    .refine((data) => data.text || data.image || data.audio, {
+      message: "Message must contain text, image, or audio",
     }),
 });
 
@@ -66,5 +68,24 @@ export const editMessageSchema = z.object({
 export const refreshTokenSchema = z.object({
   body: z.object({
     refreshToken: z.string().min(1, "Refresh token required"),
+  }),
+});
+
+export const verifyEmailSchema = z.object({
+  body: z.object({
+    token: z.string().min(1, "Verification token is required"),
+  }),
+});
+
+export const forgotPasswordSchema = z.object({
+  body: z.object({
+    email: z.string().trim().email("Invalid email address"),
+  }),
+});
+
+export const resetPasswordSchema = z.object({
+  body: z.object({
+    token: z.string().min(1, "Token is required"),
+    password: z.string().min(6, "Password must be at least 6 characters"),
   }),
 });

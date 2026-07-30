@@ -2,15 +2,22 @@ import express from "express";
 import "dotenv/config";
 import cors from "cors";
 import http from "http";
+import cookieParser from "cookie-parser";
+import helmet from "helmet";
+import compression from "compression";
 import { connectDB } from "./lib/db.js";
 import userRouter from "./src/routes/user.route.js";
 import messageRouter from "./src/routes/message.route.js";
+import groupRouter from "./src/routes/group.route.js";
+import callRouter from "./src/routes/call.route.js";
+import aiRouter from "./src/routes/ai.route.js";
 import { Server } from "socket.io";
 import { setIo, userSocketMap } from "./src/socket/socketState.js";
 import { registerChatHandlers, handleUserDisconnect } from "./src/socket/chat.handlers.js";
 import { apiLimiter } from "./src/middleware/rateLimiter.js";
 import { notFoundHandler, errorHandler } from "./src/middleware/errorHandler.js";
 import User from "./src/models/user.model.js";
+import Group from "./src/models/group.model.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -28,7 +35,24 @@ io.on("connection", async (socket) => {
   if (userId) {
     userSocketMap[userId] = socket.id;
     await User.findByIdAndUpdate(userId, { lastSeen: new Date() });
+
+    try {
+      const userGroups = await Group.find({ "members.userId": userId, isDeleted: false });
+      for (const group of userGroups) {
+        socket.join(group._id.toString());
+      }
+    } catch (err) {
+      console.error("Failed to join group socket rooms: ", err.message);
+    }
   }
+
+  socket.on("join-group", ({ groupId }) => {
+    if (groupId) socket.join(groupId.toString());
+  });
+
+  socket.on("leave-group", ({ groupId }) => {
+    if (groupId) socket.leave(groupId.toString());
+  });
 
   io.emit("getOnlineUsers", Object.keys(userSocketMap));
 
@@ -70,10 +94,20 @@ io.on("connection", async (socket) => {
   });
 });
 
+app.use(helmet({
+  crossOriginResourcePolicy: false,
+}));
+app.use(compression());
+app.use(cookieParser());
 app.use(express.json({ limit: "4mb" }));
 app.use(
   cors({
-    origin: "*",
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps or curl)
+      if (!origin) return callback(null, true);
+      // For production-level application, allow any origin but echo it back for credentials support
+      callback(null, true);
+    },
     credentials: true,
   })
 );
@@ -82,6 +116,9 @@ app.use(apiLimiter);
 app.use("/api/status", (req, res) => res.send("Sender is live"));
 app.use("/api/auth", userRouter);
 app.use("/api/messages", messageRouter);
+app.use("/api/groups", groupRouter);
+app.use("/api/calls", callRouter);
+app.use("/api/ai", aiRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

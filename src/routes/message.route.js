@@ -16,6 +16,9 @@ import {
   searchMessages,
   editMessage,
   deleteMessage,
+  toggleReaction,
+  togglePinMessage,
+  getPinnedMessages,
 } from "../controllers/message.controller.js";
 
 const messageRouter = Router();
@@ -48,5 +51,9 @@ messageRouter.post(
   validate(sendMessageSchema),
   sendMessage
 );
+
+messageRouter.post("/:messageId/react", protectRoute, toggleReaction);
+messageRouter.post("/:messageId/pin", protectRoute, togglePinMessage);
+messageRouter.get("/:id/pins", protectRoute, getPinnedMessages);
 
 export default messageRouter;

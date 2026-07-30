@@ -1,6 +1,7 @@
 import cloudinary from "../../lib/cloudinary.js";
 import Message from "../models/message.model.js";
 import User from "../models/user.model.js";
+import Group from "../models/group.model.js";
 import { ApiResponse } from "../utils/apiResponse.js";
 import { io, userSocketMap } from "../socket/socketState.js";
 import getAIResponse from "../utils/aiResponse.js";
@@ -74,9 +75,16 @@ export const getMessages = async (req, res) => {
       );
     }
 
-    await markMessagesRead(selectedUserId, myId);
+    const isGroup = await Group.exists({ _id: selectedUserId, isDeleted: false });
 
-    const query = buildConversationQuery(myId, selectedUserId);
+    let query;
+    if (isGroup) {
+      query = { groupId: selectedUserId, isDeleted: false };
+    } else {
+      await markMessagesRead(selectedUserId, myId);
+      query = buildConversationQuery(myId, selectedUserId);
+    }
+
     if (cursor) {
       query.createdAt = { $lt: new Date(cursor) };
     }
@@ -84,6 +92,15 @@ export const getMessages = async (req, res) => {
     const messages = await Message.find(query)
       .sort({ createdAt: -1 })
       .limit(Number(limit) + 1)
+      .populate("senderId", "fullname profilePic bio")
+      .populate({
+        path: "replyTo",
+        select: "text image audio senderId",
+        populate: {
+          path: "senderId",
+          select: "fullname",
+        },
+      })
       .lean();
 
     const hasMore = messages.length > Number(limit);
@@ -214,7 +231,7 @@ export const deleteMessage = async (req, res) => {
 
 export const sendMessage = async (req, res) => {
   try {
-    const { text, image } = req.validated?.body || req.body;
+    const { text, image, audio, replyTo } = req.validated?.body || req.body;
     const receiverId = (req.validated?.params || req.params).id;
     const senderId = req.user._id;
 
@@ -249,10 +266,67 @@ export const sendMessage = async (req, res) => {
       );
     }
 
+    let group = null;
+    if (receiverId !== "ai_quickchat") {
+      group = await Group.findOne({ _id: receiverId, isDeleted: false });
+    }
+
     let imageUrl;
     if (image) {
       const uploadResponse = await cloudinary.uploader.upload(image);
       imageUrl = uploadResponse.secure_url;
+    }
+
+    let audioUrl;
+    if (audio) {
+      const uploadResponse = await cloudinary.uploader.upload(audio, {
+        resource_type: "video",
+      });
+      audioUrl = uploadResponse.secure_url;
+    }
+
+    if (group) {
+      const newMessage = await Message.create({
+        senderId,
+        groupId: receiverId,
+        text,
+        image: imageUrl,
+        audio: audioUrl,
+        replyTo: replyTo || undefined,
+        deliveryStatus: "sent",
+      });
+
+      const populatedMessage = await Message.findById(newMessage._id)
+        .populate("senderId", "fullname profilePic bio")
+        .populate({
+          path: "replyTo",
+          select: "text image audio senderId",
+          populate: {
+            path: "senderId",
+            select: "fullname",
+          },
+        })
+        .lean();
+
+      io.to(receiverId.toString()).emit("newMessage", populatedMessage);
+
+      return res.json(
+        new ApiResponse(200, { newMessage: populatedMessage }, "Group message sent successfully")
+      );
+    }
+
+    // Check block list restrictions
+    const receiverUser = await User.findById(receiverId);
+    const senderUser = await User.findById(senderId);
+
+    if (receiverUser && senderUser) {
+      const isSenderBlocked = receiverUser.blockedUsers?.includes(senderId);
+      const isReceiverBlocked = senderUser.blockedUsers?.includes(receiverId);
+      if (isSenderBlocked || isReceiverBlocked) {
+        return res.status(403).json(
+          new ApiResponse(403, {}, "Message blocked: One of the users has blocked the other.")
+        );
+      }
     }
 
     const receiverSocketId = userSocketMap[receiverId.toString()];
@@ -263,12 +337,26 @@ export const sendMessage = async (req, res) => {
       receiverId,
       text,
       image: imageUrl,
+      audio: audioUrl,
+      replyTo: replyTo || undefined,
       deliveryStatus: isReceiverOnline ? "delivered" : "sent",
       deliveredAt: isReceiverOnline ? new Date() : undefined,
     });
 
+    const populatedMessage = await Message.findById(newMessage._id)
+      .populate("senderId", "fullname profilePic bio")
+      .populate({
+        path: "replyTo",
+        select: "text image audio senderId",
+        populate: {
+          path: "senderId",
+          select: "fullname",
+        },
+      })
+      .lean();
+
     if (receiverSocketId) {
-      io.to(receiverSocketId).emit("newMessage", newMessage);
+      io.to(receiverSocketId).emit("newMessage", populatedMessage);
     }
 
     if (isReceiverOnline) {
@@ -280,8 +368,155 @@ export const sendMessage = async (req, res) => {
     }
 
     return res.json(
-      new ApiResponse(200, { newMessage }, "Message sent successfully")
+      new ApiResponse(200, { newMessage: populatedMessage }, "Message sent successfully")
     );
+  } catch (error) {
+    console.log(error.message);
+    return res.status(500).json(new ApiResponse(500, {}, error.message));
+  }
+};
+
+export const toggleReaction = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { emoji } = req.body;
+    const userId = req.user._id;
+
+    if (!emoji) {
+      return res.status(400).json(new ApiResponse(400, {}, "Emoji is required"));
+    }
+
+    const message = await Message.findById(messageId);
+    if (!message) {
+      return res.status(404).json(new ApiResponse(404, {}, "Message not found"));
+    }
+
+    const existingReactionIndex = message.reactions.findIndex(
+      (r) => r.userId.toString() === userId.toString()
+    );
+
+    if (existingReactionIndex > -1) {
+      if (message.reactions[existingReactionIndex].emoji === emoji) {
+        // Toggle off if same emoji clicked again
+        message.reactions.splice(existingReactionIndex, 1);
+      } else {
+        // Update emoji
+        message.reactions[existingReactionIndex].emoji = emoji;
+      }
+    } else {
+      // Add reaction
+      message.reactions.push({ userId, emoji });
+    }
+
+    await message.save();
+
+    // Broadcast reaction update
+    const targetRoom = message.groupId
+      ? message.groupId.toString()
+      : null;
+
+    if (targetRoom) {
+      io.to(targetRoom).emit("message-reaction", {
+        messageId: message._id,
+        reactions: message.reactions,
+      });
+    } else {
+      const receiverSocketId = userSocketMap[message.receiverId.toString()];
+      const senderSocketId = userSocketMap[message.senderId.toString()];
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit("message-reaction", {
+          messageId: message._id,
+          reactions: message.reactions,
+        });
+      }
+      if (senderSocketId) {
+        io.to(senderSocketId).emit("message-reaction", {
+          messageId: message._id,
+          reactions: message.reactions,
+        });
+      }
+    }
+
+    return res.json(
+      new ApiResponse(200, { reactions: message.reactions }, "Reaction toggled successfully")
+    );
+  } catch (error) {
+    console.log(error.message);
+    return res.status(500).json(new ApiResponse(500, {}, error.message));
+  }
+};
+
+export const togglePinMessage = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const userId = req.user._id;
+
+    const message = await Message.findById(messageId);
+    if (!message) {
+      return res.status(404).json(new ApiResponse(404, {}, "Message not found"));
+    }
+
+    message.isPinned = !message.isPinned;
+    message.pinnedBy = message.isPinned ? userId : undefined;
+    await message.save();
+
+    // Broadcast pin toggle
+    const targetRoom = message.groupId ? message.groupId.toString() : null;
+    const payload = {
+      messageId: message._id,
+      isPinned: message.isPinned,
+      pinnedBy: message.pinnedBy,
+    };
+
+    if (targetRoom) {
+      io.to(targetRoom).emit("message-pin-toggle", payload);
+    } else {
+      const receiverSocketId = userSocketMap[message.receiverId.toString()];
+      const senderSocketId = userSocketMap[message.senderId.toString()];
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit("message-pin-toggle", payload);
+      }
+      if (senderSocketId) {
+        io.to(senderSocketId).emit("message-pin-toggle", payload);
+      }
+    }
+
+    return res.json(
+      new ApiResponse(200, { isPinned: message.isPinned, pinnedBy: message.pinnedBy }, "Message pin state updated successfully")
+    );
+  } catch (error) {
+    console.log(error.message);
+    return res.status(500).json(new ApiResponse(500, {}, error.message));
+  }
+};
+
+export const getPinnedMessages = async (req, res) => {
+  try {
+    const { id: selectedUserId } = req.params;
+    const myId = req.user._id;
+
+    const isGroup = await Group.exists({ _id: selectedUserId, isDeleted: false });
+
+    let query;
+    if (isGroup) {
+      query = { groupId: selectedUserId, isPinned: true, isDeleted: false };
+    } else {
+      query = {
+        $or: [
+          { senderId: myId, receiverId: selectedUserId },
+          { senderId: selectedUserId, receiverId: myId },
+        ],
+        isPinned: true,
+        isDeleted: false,
+      };
+    }
+
+    const messages = await Message.find(query)
+      .sort({ createdAt: -1 })
+      .populate("senderId", "fullname profilePic bio")
+      .lean();
+
+    return res.json(new ApiResponse(200, { messages }));
   } catch (error) {
     console.log(error.message);
     return res.status(500).json(new ApiResponse(500, {}, error.message));
